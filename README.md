@@ -3,7 +3,7 @@ First hands on project for Da Engineering cource Tutorial1 2025-2026
 
 <img width="1440" height="900" alt="Screenshot 2026-02-26 at 13 14 46" src="https://github.com/user-attachments/assets/f5679f23-27bb-490e-95fd-9f1cb542349c" />
 
-Add the data warehouse image from Draw.io
+
 Naming convention:
 snake naming convention
 
