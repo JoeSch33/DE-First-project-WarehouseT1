@@ -91,11 +91,12 @@ def ingest_px_cat_g1v2(csv_path: Path) -> None:
     load_dataframe_to_table(df, "ingestion.px_cat_g1v2", truncate=True)
 
 if __name__ == "__main__":
-    DATA_DIR = Path(r"C:\Users\andre\Desktop\Data Engineering\datasets")
+    DATA_DIR = Path(r"/Users/JoeyS./Desktop/GitHub/datasets")
 
     ingest_cust_info(DATA_DIR / "cust_info.csv")
     ingest_prd_info(DATA_DIR / "prd_info.csv")
     ingest_sales_details(DATA_DIR / "sales_details.csv")
     ingest_cust_az12(DATA_DIR / "CUST_AZ12.csv")
     ingest_loc_a101(DATA_DIR / "LOC_A101.csv")
+
     ingest_px_cat_g1v2(DATA_DIR / "PX_CAT_G1V2.csv")
