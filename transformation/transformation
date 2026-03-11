@@ -1,0 +1,190 @@
+import io
+import pandas as pd
+import psycopg2
+
+DATABASE_NAME = "data_warehouse"
+RAW_SCHEMA = "ingestion"
+CLEAN_SCHEMA = "transformation"
+
+SOURCE_TABLES = [
+    "cust_info",
+    "cust_az12",
+    "loc_a101",
+    "prd_info",
+    "px_cat_g1v2",
+    "sales_details"
+]
+
+CONNECTION_SETTINGS = {
+    "host": "127.0.0.1",
+    "port": "5432",
+    "database": DATABASE_NAME,
+    "user": "postgres",
+    "password": "aaaa"
+}
+
+
+def open_connection():
+    return psycopg2.connect(**CONNECTION_SETTINGS)
+
+
+def fetch_ingestion_tables():
+    connection = open_connection()
+    loaded_tables = {}
+
+    try:
+        for table_name in SOURCE_TABLES:
+            sql = f'SELECT * FROM "{RAW_SCHEMA}"."{table_name}";'
+            loaded_tables[table_name] = pd.read_sql(sql, connection)
+            print(f"{table_name} loaded with shape {loaded_tables[table_name].shape}")
+    finally:
+        connection.close()
+
+    return loaded_tables
+
+
+def standardize_empty_values(df):
+    return df.replace(r"^\s*$", pd.NA, regex=True)
+
+
+def trim_customer_text_fields(df):
+    cleaned_df = df.copy()
+
+    text_columns = ["cst_firstname", "cst_lastname", "cst_key"]
+    for column in text_columns:
+        if column in cleaned_df.columns:
+            cleaned_df[column] = cleaned_df[column].astype("string").str.strip()
+
+    return cleaned_df
+
+
+def filter_missing_customer_fields(df):
+    missing_id = df[df["cst_id"].isna()]
+    missing_key = df[df["cst_key"].isna()]
+
+    print(f"Missing cst_id rows: {len(missing_id)}")
+    print(f"Missing cst_key rows: {len(missing_key)}")
+
+    return df[df["cst_id"].notna() & df["cst_key"].notna()].copy()
+
+
+def keep_only_valid_customer_keys(df):
+    expected_keys = "AW000" + df["cst_id"].astype("string")
+
+    wrong_keys = df[df["cst_key"] != expected_keys]
+    print(f"Rows with incorrect cst_key: {len(wrong_keys)}")
+
+    filtered_df = df[df["cst_key"] == expected_keys].copy()
+    return filtered_df
+
+
+def remove_duplicate_customers(df):
+    duplicates = df[df["cst_id"].duplicated(keep=False)]
+    print(f"Duplicate cst_id rows: {len(duplicates)}")
+
+    return df.drop_duplicates(subset=["cst_id"], keep="first").copy()
+
+
+def decode_customer_categories(df):
+    updated_df = df.copy()
+
+    updated_df["cst_marital_status"] = updated_df["cst_marital_status"].replace({
+        "M": "Married",
+        "S": "Single"
+    })
+
+    updated_df["cst_gndr"] = updated_df["cst_gndr"].replace({
+        "M": "Male",
+        "F": "Female"
+    })
+
+    return updated_df
+
+
+def check_future_customer_dates(df):
+    checked_df = df.copy()
+
+    checked_df["temp_create_date"] = pd.to_datetime(
+        checked_df["cst_create_date"],
+        errors="coerce"
+    )
+
+    future_rows = checked_df[
+        checked_df["temp_create_date"].notna() &
+        (checked_df["temp_create_date"].dt.date > pd.Timestamp.today().date())
+    ]
+
+    print(f"Future create_date rows: {len(future_rows)}")
+
+    checked_df = checked_df.drop(columns=["temp_create_date"], errors="ignore")
+    return checked_df
+
+
+def transform_cust_info(df):
+    result = df.copy()
+
+    result = standardize_empty_values(result)
+    result = trim_customer_text_fields(result)
+    result = filter_missing_customer_fields(result)
+    result = keep_only_valid_customer_keys(result)
+    result = remove_duplicate_customers(result)
+    result = decode_customer_categories(result)
+    result = check_future_customer_dates(result)
+
+    result = result.fillna("NA")
+
+    print(f"Final cust_info size: {result.shape}")
+    return result
+
+
+def recreate_target_table(cursor, df, destination_table):
+    cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{CLEAN_SCHEMA}";')
+    cursor.execute(f'DROP TABLE IF EXISTS "{CLEAN_SCHEMA}"."{destination_table}";')
+
+    column_definitions = []
+    for column in df.columns:
+        column_definitions.append(f'"{column}" TEXT')
+
+    create_sql = f'''
+        CREATE TABLE "{CLEAN_SCHEMA}"."{destination_table}" (
+            {", ".join(column_definitions)}
+        );
+    '''
+    cursor.execute(create_sql)
+
+
+def write_dataframe_to_postgres(df, destination_table):
+    connection = open_connection()
+    cursor = connection.cursor()
+
+    try:
+        recreate_target_table(cursor, df, destination_table)
+        connection.commit()
+
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False, header=False)
+        csv_buffer.seek(0)
+
+        column_list = ", ".join([f'"{col}"' for col in df.columns])
+
+        copy_sql = f'''
+            COPY "{CLEAN_SCHEMA}"."{destination_table}" ({column_list})
+            FROM STDIN WITH CSV
+        '''
+        cursor.copy_expert(copy_sql, csv_buffer)
+
+        connection.commit()
+        print(f"Saved table {CLEAN_SCHEMA}.{destination_table}")
+    finally:
+        cursor.close()
+        connection.close()
+
+
+def run_transformation():
+    raw_tables = fetch_ingestion_tables()
+    cleaned_customers = transform_cust_info(raw_tables["cust_info"])
+    write_dataframe_to_postgres(cleaned_customers, "cust_info")
+
+
+if __name__ == "__main__":
+    run_transformation()
