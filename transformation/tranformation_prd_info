@@ -2,6 +2,9 @@ import psycopg2
 import pandas as pd
 from sqlalchemy import create_engine
 
+#--------------------------
+# READ SQL
+#--------------------------
 conn = psycopg2.connect(
     host="127.0.0.1",
     port=5432,
@@ -14,6 +17,9 @@ cur = conn.cursor()
 
 df = pd.read_sql_query("SELECT * FROM ingestion.prd_info;", con=conn)
 
+#--------------------------
+# DATA CLEANING STEPS
+#--------------------------
 # Turn empty strings / spaces into real missing values
 df = df.replace(r"^\s*$", pd.NA, regex=True)
 
@@ -57,6 +63,9 @@ df["prd_line"] = df["prd_line"].replace({
     "S": "Sport"
 })
 
+#--------------------------
+# WRITE TO SQL
+#--------------------------
 cur.execute("CREATE SCHEMA IF NOT EXISTS transformation;")
 conn.commit()
 
@@ -71,6 +80,11 @@ df.to_sql(
     if_exists="replace",
     index=False
 )
+
+print("Cleaned data loaded into transformation.prd_info")
+
+cur.close()
+conn.close()
 
 print("Cleaned data loaded into transformation.prd_info")
 
